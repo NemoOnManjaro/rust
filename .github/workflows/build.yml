@@ -1,0 +1,56 @@
+name: 'buildpackage'
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  pkgbuild:
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      matrix:
+        pkgbuild: ["PKGBUILD"]
+        branch: [stable]
+        runs-on: [ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runs-on }}
+    container:
+      image: docker://manjarolinux/build:latest
+    steps:
+      - name: check out repo for action code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - id: version
+        uses: manjaro-contrib/action-pkgbuild-info@main
+        with:
+          pkgbuild: ${{ matrix.pkgbuild }}
+      - name: pkgbuild
+        if: steps.skip.outputs.skip != 'true'
+        uses: manjaro-contrib/action-makepkg@main
+        with:
+          pkgbuild: ${{ matrix.pkgbuild }}
+          dispatch-token: ${{ secrets.DISPATCH }}
+          branch: ${{ matrix.branch }}
+          release: ${{ matrix.branch }}-${{ steps.version.outputs.version }}
+          matrix.arch: $arch
+          additional_repo: >
+            [nemomobile]\n
+            SigLevel = Optional TrustAll\n
+            Server = https://img.nemomobile.net/manjaro/${{ matrix.branch }}/\$arch\n
+      - name: Copy to server
+        uses: appleboy/scp-action@v0.1.7
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.PASSWORD }}
+          source: '*.zst'
+          target: ${{ matrix.branch }}/\${{ matrix.runs-on == 'ubuntu-22.04-arm' && '/aarch64/' || '/x86_64/' }}
+
+

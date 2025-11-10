@@ -1,0 +1,267 @@
+# Maintainer: Johannes Löthberg <johannes@kyriasis.com>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Alexander F Rødseth <xyproto@archlinux.org>
+# Contributor: Daniel Micay <danielmicay@gmail.com>
+# Contributor: userwithuid <userwithuid@gmail.com>
+
+# ALARM: Kevin Mihelich <kevin@archlinuxarm.org>
+#  - remove lib32, musl, and wasm packages and related bits
+#  - add a link to g++ to compensate for broken cross-compiler decisions
+#  - build v6/v7 with -j2 - RAM constraints
+#  - set llvm-config in config.toml for ARM architectures
+#  - set debuginfo-level = 0 in config.toml - RAM constraints
+#  - build aarch64 with 16k page support
+
+highmem=1
+
+pkgbase=rust
+pkgname=(
+  rust
+  rust-src
+)
+epoch=1
+pkgver=1.78.0
+pkgrel=1
+pkgdesc="Systems programming language focused on safety, speed and concurrency"
+url=https://www.rust-lang.org/
+arch=(x86_64)
+license=("Apache-2.0 OR MIT")
+options=(
+  !emptydirs
+  !lto
+)
+depends=(
+  bash
+  curl
+  gcc
+  gcc-libs
+  glibc
+  libssh2
+  llvm-libs
+  openssl
+  zlib
+)
+makedepends=(
+  clang
+  cmake
+  libffi
+  lld
+  llvm
+  musl
+  ninja
+  perl
+  python
+  rust
+  rustup
+)
+checkdepends=(
+  gdb
+  procps-ng
+)
+source=(
+  "https://static.rust-lang.org/dist/rustc-$pkgver-src.tar.gz"
+  0001-bootstrap-Change-libexec-dir.patch
+  0002-bootstrap-Change-bash-completion-dir.patch
+  0003-compiler-Change-LLVM-targets.patch
+  0004-compiler-Use-wasm-ld-for-wasm-targets.patch
+)
+b2sums=('3f43a1c50e268afbe76755ae24bccb3db9ff4dd8bbb8130c75d486c4c0e40f0253c4d4cad1de1040600c090d03d93b08adee5b16fa8abcf36d47a3c14024719f'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP')
+
+prepare() {
+  cd rustc-$pkgver-src
+
+  # Patch bootstrap so that rust-analyzer-proc-macro-srv
+  # is in /usr/lib instead of /usr/libexec
+  patch -Np1 -i ../0001-bootstrap-Change-libexec-dir.patch
+
+  # Put bash completions where they belong
+  patch -Np1 -i ../0002-bootstrap-Change-bash-completion-dir.patch
+
+  # Use our *-pc-linux-gnu targets, making LTO with clang simpler
+  patch -Np1 -i ../0003-compiler-Change-LLVM-targets.patch
+
+  # Use our wasm-ld
+  patch -Np1 -i ../0004-compiler-Use-wasm-ld-for-wasm-targets.patch
+
+  cat >config.toml <<END
+profile = "user"
+change-id = 121754
+
+[llvm]
+link-shared = true
+
+[build]
+cargo = "/usr/bin/cargo"
+rustc = "/usr/bin/rustc"
+rustfmt = "/usr/bin/rustfmt"
+locked-deps = true
+vendor = true
+tools = [
+  "cargo",
+  "clippy",
+  "rustdoc",
+  "rustfmt",
+  "rust-analyzer-proc-macro-srv",
+  "analysis",
+  "src",
+  "rust-demangler",
+]
+sanitizers = false
+profiler = true
+
+# Generating docs fails with the wasm32-* targets
+docs = false
+
+[install]
+prefix = "/usr"
+
+[rust]
+codegen-units-std = 1
+debuginfo-level = 1
+debuginfo-level-std = 0
+channel = "stable"
+description = "Arch Linux $pkgbase $epoch:$pkgver-$pkgrel"
+rpath = false
+deny-warnings = false
+backtrace-on-ice = true
+jemalloc = true
+
+[dist]
+compression-formats = ["gz"]
+
+[target.x86_64-unknown-linux-gnu]
+cc = "/usr/bin/gcc"
+cxx = "/usr/bin/g++"
+ar = "/usr/bin/gcc-ar"
+ranlib = "/usr/bin/gcc-ranlib"
+llvm-config = "/usr/bin/llvm-config"
+
+[target.i686-unknown-linux-gnu]
+cc = "/usr/bin/gcc"
+cxx = "/usr/bin/g++"
+ar = "/usr/bin/gcc-ar"
+ranlib = "/usr/bin/gcc-ranlib"
+
+[target.aarch64-unknown-linux-gnu]
+cc = "/usr/bin/gcc"
+cxx = "/usr/bin/g++"
+ar = "/usr/bin/gcc-ar"
+ranlib = "/usr/bin/gcc-ranlib"
+llvm-config = "/usr/bin/llvm-config"
+
+[target.armv7-unknown-linux-gnueabihf]
+cc = "/usr/bin/gcc"
+cxx = "/usr/bin/g++"
+ar = "/usr/bin/gcc-ar"
+ranlib = "/usr/bin/gcc-ranlib"
+llvm-config = "/usr/bin/llvm-config"
+
+[target.arm-unknown-linux-gnueabihf]
+cc = "/usr/bin/gcc"
+cxx = "/usr/bin/g++"
+ar = "/usr/bin/gcc-ar"
+ranlib = "/usr/bin/gcc-ranlib"
+llvm-config = "/usr/bin/llvm-config"
+END
+
+  if [[ $CARCH == armv7h ]]; then
+    mkdir path
+    ln -s /usr/bin/g++ path/arm-linux-gnueabihf-g++
+    export PATH="$srcdir/path:$PATH"
+  fi
+  if [[ $CARCH == armv7h || $CARCH == armv6h ]]; then
+    jobs="-j 2"
+  fi
+  rustup toolchain install $pkgver
+  rustup default $pkgver
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/$f"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+
+}
+
+build() {
+  cd rustc-$pkgver-src
+
+  [[ $CARCH == "aarch64" ]] && export JEMALLOC_SYS_WITH_LG_PAGE=16
+  export RUST_BACKTRACE=1
+  unset CFLAGS CXXFLAGS LDFLAGS
+
+  DESTDIR="$srcdir/dest-rust" python ./x.py install -j "$(nproc)"
+
+  cd ../dest-rust
+
+  # delete unnecessary files, e.g. files only used for the uninstall script
+  rm -v usr/lib/rustlib/{components,install.log,rust-installer-version,uninstall.sh}
+  rm -v usr/lib/rustlib/manifest-*
+
+  # licenses for main rust package
+  local ldir="usr/share/licenses/rust" f d
+  mkdir -p "$ldir"
+  for f in usr/share/doc/*/{COPYRIGHT,LICENSE}*; do
+    d="$(dirname "$f")"
+    case $f in
+      */LICENSE-APACHE) rm -v "$f" ;;
+      *) mv -v "$f" "$ldir/${f##*/}.${d##*/}" ;;
+    esac
+    rmdir -p --ignore-fail-on-non-empty "$d"
+  done
+
+  # rustbuild always installs copies of the shared libraries to /usr/lib,
+  # overwrite them with symlinks to the per-architecture versions
+  #mkdir -pv usr/lib32
+  #ln -srvft usr/lib   usr/lib/rustlib/x86_64-unknown-linux-gnu/lib/*.so
+  #ln -srvft usr/lib32 usr/lib/rustlib/i686-unknown-linux-gnu/lib/*.so
+
+  #_pick dest-i686 usr/lib/rustlib/i686-unknown-linux-gnu usr/lib32
+  #_pick dest-musl usr/lib/rustlib/x86_64-unknown-linux-musl
+  #_pick dest-wasm usr/lib/rustlib/wasm32-*
+  _pick dest-src  usr/lib/rustlib/src
+}
+
+package_rust() {
+  optdepends=(
+    'gdb: rust-gdb script'
+    'lldb: rust-lldb script'
+  )
+  provides=(
+    cargo
+    rustfmt
+  )
+  conflicts=(
+    cargo
+    'rust-docs<1:1.56.1-3'
+    rustfmt
+  )
+  replaces=(
+    cargo
+    cargo-tree
+    'rust-docs<1:1.56.1-3'
+    rustfmt
+  )
+
+  cp -a dest-rust/* "$pkgdir"
+}
+
+package_rust-src() {
+  pkgdesc="Source code for the Rust standard library"
+  depends=(rust)
+
+  cp -a dest-src/* "$pkgdir"
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 \
+    rustc-$pkgver-src/{COPYRIGHT,LICENSE-MIT}
+}
+
+# vim:set ts=2 sw=2 et:
